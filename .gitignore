@@ -1,0 +1,17 @@
+# Environment
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data
+data/raw/
+models/
+
+# VS Code
+.vscode/
+
+# Streamlit
+.streamlit/

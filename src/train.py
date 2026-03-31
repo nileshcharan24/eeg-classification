@@ -1,0 +1,214 @@
+import os
+import sys
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_class_weight
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.data_loader import load_all_data, verify_data_shape
+from src.features import extract_dataset_features
+from src.model import EEGClassifier, get_device
+
+# Simple Early Stopping mechanism based on validation loss
+class EarlyStopping:
+    def __init__(self, patience=10, delta=0.0):
+        self.patience = patience
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+        self.delta = delta
+        
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
+
+def main():
+    data_dir = os.path.join('data', 'raw', 'data_preprocessed_python')
+    if not os.path.exists(data_dir):
+        print(f"Error: Data directory {data_dir} not found.")
+        print("Please ensure you have downloaded and placed the DEAP .dat files there.")
+        return
+
+    # 1. Verify and Load Data
+    print("--- Step 1: Loading Data ---")
+    first_file = os.path.join(data_dir, 's01.dat')
+    if os.path.exists(first_file):
+        verify_data_shape(first_file)
+    
+    X_raw, y, subject_ids, trial_ids = load_all_data(data_dir)
+    print(f"Loaded total {X_raw.shape[0]} trials.")
+
+    # 2. Feature Extraction
+    print("\n--- Step 2: Feature Extraction (PSD) ---")
+    print("This might take a moment. Extracting features with sliding window...")
+    X_features, y, subject_ids, trial_ids = extract_dataset_features(X_raw, y, subject_ids, trial_ids)
+    print(f"Feature extraction completed. Features shape: {X_features.shape}")
+
+    # 3. Train-Test Split
+    print("\n--- Step 3: Train/Test Split & Scaling ---")
+    indices = np.arange(len(X_features))
+    X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
+        X_features, y, indices, test_size=0.2, random_state=42, stratify=y
+    )
+
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # 4. Prepare UI Data
+    print("\n--- Step 4: Preparing UI Test Data ---")
+    ui_test_dir = os.path.join('data', 'processed')
+    os.makedirs(ui_test_dir, exist_ok=True)
+    ui_data_path = os.path.join(ui_test_dir, 'ui_test_data.csv')
+    
+    df_ui = pd.DataFrame(X_test_scaled, columns=[f"feat_{i}" for i in range(X_test_scaled.shape[1])])
+    df_ui['label'] = y_test
+    df_ui['subject_id'] = subject_ids[idx_test]
+    df_ui['trial_id'] = trial_ids[idx_test]
+    
+    df_ui.to_csv(ui_data_path, index=False)
+    print(f"Saved UI test data to: {ui_data_path}")
+
+    # 5. Model Setup & Class Weights
+    print("\n--- Step 5: Model Training Setup ---")
+    device = get_device()
+    print(f"Using device natively bound to: {device}")
+    
+    # Calculate Class Weights to handle severe class imbalance
+    class_weights = compute_class_weight(
+        class_weight='balanced', 
+        classes=np.unique(y_train), 
+        y=y_train
+    )
+    print(f"Computed Class Weights: {class_weights}")
+    
+    # Send model and weights to the designated GPU/CPU device
+    model = EEGClassifier(input_size=128, num_classes=3).to(device)
+    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
+    
+    # Pass calculated weights into CrossEntropyLoss to penalize ignoring minority classes
+    criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+
+    # Create DataLoaders
+    train_dataset = TensorDataset(torch.tensor(X_train_scaled, dtype=torch.float32), 
+                                  torch.tensor(y_train, dtype=torch.long))
+    test_dataset = TensorDataset(torch.tensor(X_test_scaled, dtype=torch.float32), 
+                                 torch.tensor(y_test, dtype=torch.long))
+
+    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+
+    # 6. Training Loop with Early Stopping & LR Scheduler
+    print("\n--- Step 6: Training Model (Deep 1D-CNN) ---")
+    epochs = 150
+    early_stopper = EarlyStopping(patience=15, delta=0.01)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device) # Force to GPU
+            
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            
+        train_loss = running_loss / len(train_loader)
+        
+        # Validation evaluation for Early Stopping
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                inputs, labels = inputs.to(device), labels.to(device) # Force to GPU
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+        val_loss /= len(test_loader)
+        
+        # Step the scheduler
+        scheduler.step(val_loss)
+        
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch [{epoch+1}/{epochs}] - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f} - LR: {current_lr:.6f}")
+        
+        early_stopper(val_loss)
+        if early_stopper.early_stop:
+            print(f"Early stopping triggered at epoch {epoch+1}. Model validation loss stopped improving.")
+            break
+
+    # 7. Evaluation
+    print("\n--- Step 7: Evaluation ---")
+    model.eval()
+    all_preds = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            
+    target_names = ['Stress', 'Relaxation', 'Attention/Normal']
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_preds, labels=[0, 1, 2], target_names=target_names, zero_division=0))
+
+    # 8. Save Model
+    print("\n--- Step 8: Saving Model ---")
+    os.makedirs('models', exist_ok=True)
+    model_save_path = os.path.join('models', 'eeg_classifier.pth')
+    torch.save(model.state_dict(), model_save_path)
+    print(f"Model saved to: {model_save_path}")
+    
+    # 9. Terminal Predictions Demo
+    print("\n--- Step 9: Terminal Predictions Demo ---")
+    print("Testing 5 random samples from the unseen Test Set...\n")
+    
+    # Select 5 random indices from test set
+    demo_indices = np.random.choice(len(X_test_scaled), 5, replace=False)
+    class_map = {0: 'Stress', 1: 'Relaxation', 2: 'Attention/Normal'}
+    
+    model.eval()
+    with torch.no_grad():
+        for i, idx in enumerate(demo_indices):
+            sample_features = torch.tensor(X_test_scaled[idx], dtype=torch.float32).unsqueeze(0).to(device)
+            true_label_idx = y_test[idx]
+            
+            output = model(sample_features)
+            predicted_idx = torch.argmax(output, dim=1).item()
+            
+            actual_class = class_map[true_label_idx]
+            pred_class = class_map[predicted_idx]
+            
+            print(f"Sample {i+1} | Actual: [{actual_class:^16}] | Predicted: [{pred_class:^16}]")
+
+    print("\nPipeline completed successfully!")
+
+if __name__ == "__main__":
+    main()
