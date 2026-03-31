@@ -8,7 +8,6 @@ __pycache__/
 
 # Data
 data/raw/
-models/
 
 # VS Code
 .vscode/
