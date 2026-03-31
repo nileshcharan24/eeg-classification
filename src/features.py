@@ -19,10 +19,10 @@ def apply_bandpass_filter(data, lowcut=4.0, highcut=45.0, fs=128.0, order=5):
 
 def extract_psd_features(eeg_data, fs=128.0):
     """
-    Extracts Power Spectral Density (PSD) for standard frequency bands using FFT (Welch's method).
+    Extracts Power Spectral Density (PSD) and Differential Entropy (DE) for standard frequency bands.
     eeg_data shape: (channels, samples)
     Bands: Theta (4-8 Hz), Alpha (8-13 Hz), Beta (13-30 Hz), Gamma (30-45 Hz)
-    Returns: Features array of shape (channels * 4,)
+    Returns: Features array of shape (channels * 4 * 2,)
     """
     bands = {
         'Theta': (4, 8),
@@ -32,7 +32,7 @@ def extract_psd_features(eeg_data, fs=128.0):
     }
     
     num_channels = eeg_data.shape[0]
-    features = np.zeros(num_channels * len(bands))
+    features = np.zeros(num_channels * len(bands) * 2) # *2 for PSD and DE
     
     nperseg = min(int(2 * fs), eeg_data.shape[-1])
     freqs, psd = welch(eeg_data, fs=fs, nperseg=nperseg, axis=-1)
@@ -43,7 +43,16 @@ def extract_psd_features(eeg_data, fs=128.0):
         for band_name, (low, high) in bands.items():
             idx_band = np.logical_and(freqs >= low, freqs <= high)
             band_power = np.mean(channel_psd[idx_band])
+            
+            # 1. Power Spectral Density (PSD)
             features[feature_idx] = band_power
+            feature_idx += 1
+            
+            # 2. Differential Entropy (DE)
+            # DE for a Gaussian distribution can be estimated as 0.5 * log(2 * pi * e * variance)
+            # We approximate variance within the band using the band power. Add epsilon to avoid log(0)
+            de = 0.5 * np.log(2 * np.pi * np.e * (band_power + 1e-9))
+            features[feature_idx] = de
             feature_idx += 1
             
     return features

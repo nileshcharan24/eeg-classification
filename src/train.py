@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, accuracy_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -55,21 +55,28 @@ def main():
     print(f"Loaded total {X_raw.shape[0]} trials.")
 
     # 2. Feature Extraction
-    print("\n--- Step 2: Feature Extraction (PSD) ---")
+    print("\n--- Step 2: Feature Extraction (PSD & DE) ---")
     print("This might take a moment. Extracting features with sliding window...")
     X_features, y, subject_ids, trial_ids = extract_dataset_features(X_raw, y, subject_ids, trial_ids)
     print(f"Feature extraction completed. Features shape: {X_features.shape}")
 
+    # 2.5. Subject-Wise Normalization
+    print("\n--- Step 2.5: Subject-Wise Normalization ---")
+    print("Applying Standard Scaling independently to each subject...")
+    unique_subjects = np.unique(subject_ids)
+    for subj in unique_subjects:
+        subj_mask = (subject_ids == subj)
+        scaler = StandardScaler()
+        # Scale the features for this specific subject
+        X_features[subj_mask] = scaler.fit_transform(X_features[subj_mask])
+
     # 3. Train-Test Split
-    print("\n--- Step 3: Train/Test Split & Scaling ---")
+    print("\n--- Step 3: Train/Test Split ---")
     indices = np.arange(len(X_features))
-    X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
+    X_train_scaled, X_test_scaled, y_train, y_test, idx_train, idx_test = train_test_split(
         X_features, y, indices, test_size=0.2, random_state=42, stratify=y
     )
-
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    print(f"Train size: {X_train_scaled.shape[0]}, Test size: {X_test_scaled.shape[0]}")
 
     # 4. Prepare UI Data
     print("\n--- Step 4: Preparing UI Test Data ---")
@@ -99,7 +106,8 @@ def main():
     print(f"Computed Class Weights: {class_weights}")
     
     # Send model and weights to the designated GPU/CPU device
-    model = EEGClassifier(input_size=128, num_classes=3).to(device)
+    input_size = X_train_scaled.shape[1]
+    model = EEGClassifier(input_size=input_size, num_classes=3).to(device)
     class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
     
     # Pass calculated weights into CrossEntropyLoss to penalize ignoring minority classes
@@ -178,6 +186,10 @@ def main():
     target_names = ['Stress', 'Relaxation', 'Attention/Normal']
     print("\nClassification Report:")
     print(classification_report(all_labels, all_preds, labels=[0, 1, 2], target_names=target_names, zero_division=0))
+    
+    # Calculate and explicitly print the final overall test accuracy
+    final_accuracy = accuracy_score(all_labels, all_preds)
+    print(f"\n--- FINAL TEST ACCURACY: {final_accuracy * 100:.2f}% ---")
 
     # 8. Save Model
     print("\n--- Step 8: Saving Model ---")

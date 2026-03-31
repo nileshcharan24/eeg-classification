@@ -23,14 +23,14 @@ def load_data():
     return pd.read_csv(data_path)
 
 @st.cache_resource
-def load_model():
+def load_model(input_size):
     """Load the trained PyTorch model."""
     model_path = os.path.join('models', 'eeg_classifier.pth')
     if not os.path.exists(model_path):
         return None
     
     # Initialize the model
-    model = EEGClassifier(input_size=128, num_classes=3)
+    model = EEGClassifier(input_size=input_size, num_classes=3)
     
     # Load weights
     try:
@@ -48,17 +48,22 @@ def main():
     st.title("🧠 EEG Mental State Classification")
     st.markdown("""
     This application predicts mental states (**Stress**, **Relaxation**, **Attention/Normal**) 
-    from EEG signal features (Power Spectral Density) extracted from the DEAP dataset.
+    from EEG signal features (Power Spectral Density and Differential Entropy) extracted from the DEAP dataset.
     """)
 
     # Load resources
     df = load_data()
-    model = load_model()
-
+    
     if df is None:
         st.warning("⚠️ Data file not found. Please run the training pipeline first to generate `data/processed/ui_test_data.csv`.")
         return
         
+    # Infer input size dynamically from the features in the ui test data
+    feature_cols = [col for col in df.columns if col.startswith('feat_')]
+    input_size = len(feature_cols)
+
+    model = load_model(input_size)
+    
     if model is None:
         st.warning("⚠️ Model weights not found. Please run the training pipeline first to save `models/eeg_classifier.pth`.")
         return
@@ -81,8 +86,6 @@ def main():
     true_label_idx = int(instance['label'])
     true_label_name = CLASS_MAP[true_label_idx]
     
-    # The feature columns are all columns starting with 'feat_'
-    feature_cols = [col for col in df.columns if col.startswith('feat_')]
     features = instance[feature_cols].values.astype(np.float32)
 
     # --- Prediction ---
@@ -131,7 +134,7 @@ def main():
     st.bar_chart(prob_df.set_index('Mental State'), height=300)
     
     # Show Raw Features (Optional Toggle)
-    with st.expander("View Input PSD Features (Normalized)"):
+    with st.expander("View Input PSD & DE Features (Normalized)"):
         st.line_chart(features)
 
 if __name__ == '__main__':
