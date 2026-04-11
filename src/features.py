@@ -95,12 +95,34 @@ def extract_psd_features(eeg_data, fs=128.0):
             
     return features
 
+import os
+import pickle
+
 def extract_dataset_features(data_array, y=None, subject_ids=None, trial_ids=None, window_size=4, overlap=0.5, fs=128.0, feature_type='psd'):
     """
     Applies the feature extraction pipeline to the entire dataset using a sliding window.
+    Implements a caching mechanism to avoid recalculating FFT/DE across training runs.
     data_array shape: (Trials, 32_Channels, Samples)
     feature_type: 'psd' for CNN features (PSD & DE), 'rf' for Random Forest features (Statistical)
     """
+    cache_dir = os.path.join('data', 'processed')
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_filename = f"features_cache_{feature_type}_win{window_size}_ov{int(overlap*100)}.pkl"
+    cache_path = os.path.join(cache_dir, cache_filename)
+    
+    if os.path.exists(cache_path):
+        print(f"\n--- Loading cached features ({feature_type.upper()}) ---")
+        print(f"File: {cache_path}")
+        with open(cache_path, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        if y is not None:
+            return cache_data['features'], cache_data['y'], cache_data['subject_ids'], cache_data['trial_ids']
+        return cache_data['features']
+        
+    print(f"\n--- Extracting and caching features ({feature_type.upper()}) ---")
+    print(f"Window: {window_size}s, Overlap: {overlap*100}%. This might take a moment...")
+    
     num_trials = data_array.shape[0]
     samples_per_trial = data_array.shape[2]
     
@@ -142,6 +164,22 @@ def extract_dataset_features(data_array, y=None, subject_ids=None, trial_ids=Non
             if trial_ids is not None:
                 all_trial_ids.append(trial_ids[i])
                 
+    features_arr = np.array(all_features)
+    y_arr = np.array(all_y) if y is not None else None
+    subj_arr = np.array(all_subject_ids) if subject_ids is not None else None
+    trial_arr = np.array(all_trial_ids) if trial_ids is not None else None
+    
+    # Save to Cache
+    cache_data = {
+        'features': features_arr,
+        'y': y_arr,
+        'subject_ids': subj_arr,
+        'trial_ids': trial_arr
+    }
+    with open(cache_path, 'wb') as f:
+        pickle.dump(cache_data, f)
+    print(f"Saved extracted features to cache: {cache_path}")
+        
     if y is not None:
-        return np.array(all_features), np.array(all_y), np.array(all_subject_ids), np.array(all_trial_ids)
-    return np.array(all_features)
+        return features_arr, y_arr, subj_arr, trial_arr
+    return features_arr

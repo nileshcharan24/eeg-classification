@@ -43,12 +43,13 @@ def main(model_type):
     # 2. Feature Extraction
     feature_desc = 'PSD & DE' if model_type in ['cnn', 'cnn_lstm', 'eegnet'] else 'Statistical Features'
     print(f"--- Step 2: Feature Extraction ({feature_desc}) ---")
-    print("This might take a moment. Extracting features with sliding window...")
     feature_type_arg = 'psd' if model_type in ['cnn', 'cnn_lstm', 'eegnet'] else 'rf'
+    
+    # Caching handled internally
     X_features, y, subject_ids, trial_ids = extract_dataset_features(
         X_raw, y, subject_ids, trial_ids, feature_type=feature_type_arg
     )
-    print(f"Feature extraction completed. Features shape: {X_features.shape}\n")
+    print(f"\nFeature pipeline completed. Final Features shape: {X_features.shape}\n")
 
     # 3. Subject-Wise Normalization
     print("--- Step 3: Subject-Wise Normalization ---")
