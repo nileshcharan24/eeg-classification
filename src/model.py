@@ -239,7 +239,17 @@ class EEGClassifier(nn.Module):
 def get_device():
     """Returns the appropriate device and explicitly warns if GPU is not available."""
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        try:
+            # Test allocation to catch hardware/capability mismatches (e.g. on Kaggle)
+            _ = torch.zeros(1).cuda()
+            return torch.device("cuda")
+        except (RuntimeError, AssertionError) as e:
+            print("\n" + "="*60)
+            print("⚠️  WARNING: CUDA is available, but a hardware/capability mismatch occurred:")
+            print(f"   {e}")
+            print("Falling back to CPU safely. The model will train on the CPU.")
+            print("="*60 + "\n")
+            return torch.device("cpu")
     else:
         print("\n" + "="*60)
         print("⚠️  WARNING: CUDA is returning False. GPU is NOT available.")

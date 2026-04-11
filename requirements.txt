@@ -1,6 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cu128
 torch
 torchvision
+torchaudio
 numpy
 scipy
 scikit-learn
