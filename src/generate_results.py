@@ -47,7 +47,7 @@ def main(model_type):
     
     # Caching handled internally
     X_features, y, subject_ids, trial_ids = extract_dataset_features(
-        X_raw, y, subject_ids, trial_ids, feature_type=feature_type_arg
+        X_raw, y, subject_ids, trial_ids, feature_type=feature_type_arg, window_size=2.0, overlap=0.5
     )
     print(f"\nFeature pipeline completed. Final Features shape: {X_features.shape}\n")
 

@@ -64,8 +64,9 @@ def main(model_type):
     feature_type_arg = 'psd' if model_type in ['cnn', 'cnn_lstm', 'eegnet'] else 'rf'
     
     # The caching logic is handled internally within extract_dataset_features
+    # Enforcing 2-second windows with 50% overlap as requested
     X_features, y, subject_ids, trial_ids = extract_dataset_features(
-        X_raw, y, subject_ids, trial_ids, feature_type=feature_type_arg
+        X_raw, y, subject_ids, trial_ids, feature_type=feature_type_arg, window_size=2.0, overlap=0.5
     )
     print(f"\nFeature pipeline completed. Final Features shape: {X_features.shape}")
 
@@ -171,14 +172,22 @@ def main(model_type):
         # 6. Training Loop with Early Stopping & LR Scheduler
         if model_type == 'eegnet':
             model_name = "EEGNet"
+            patience_es = 15
+            patience_lr = 5
         elif model_type == 'cnn_lstm':
             model_name = "CNN-LSTM"
+            # Lenient Early Stopping and LR scheduling for CNN-LSTM
+            patience_es = 25
+            patience_lr = 7
         else:
             model_name = "Deep 1D-CNN"
+            patience_es = 15
+            patience_lr = 5
+            
         print(f"\n--- Step 6: Training Model ({model_name}) ---")
         epochs = 150
-        early_stopper = EarlyStopping(patience=15, delta=0.01)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+        early_stopper = EarlyStopping(patience=patience_es, delta=0.01)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=patience_lr)
         
         for epoch in range(epochs):
             model.train()

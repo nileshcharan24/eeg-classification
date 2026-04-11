@@ -134,22 +134,24 @@ class CNNLSTMClassifier(nn.Module):
         self.conv1 = nn.Conv1d(in_channels=1, out_channels=64, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm1d(64)
         self.elu1 = nn.ELU()
-        self.drop1 = nn.Dropout(0.3)
+        self.drop1 = nn.Dropout(0.5) # Aggressive regularization
         
         # Layer 2 (Spatial Conv)
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm1d(128)
         self.elu2 = nn.ELU()
-        self.drop2 = nn.Dropout(0.3)
+        self.drop2 = nn.Dropout(0.5) # Aggressive regularization
         
         # Layer 3 (LSTM)
         # CNN output is (Batch, 128, Features). We permute to (Batch, Features, 128) for LSTM
-        self.lstm = nn.LSTM(input_size=128, hidden_size=128, batch_first=True)
+        # Bidirectional added to process sequences forwards and backwards
+        self.lstm = nn.LSTM(input_size=128, hidden_size=128, batch_first=True, bidirectional=True)
         
         # Layer 4 (Dense)
-        self.fc1 = nn.Linear(128, 128)
+        # Input features doubled to 256 because of bidirectional LSTM
+        self.fc1 = nn.Linear(256, 128)
         self.relu = nn.ReLU()
-        self.drop3 = nn.Dropout(0.5)
+        self.drop3 = nn.Dropout(0.5) # Aggressive regularization
         
         # Output Layer
         self.fc2 = nn.Linear(128, num_classes)
