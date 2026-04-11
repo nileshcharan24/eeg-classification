@@ -1,0 +1,71 @@
+Project Title: EEG Mental State Classification - Comprehensive Technical Overview
+
+1. Introduction & Objectives
+This project is an end-to-end Machine Learning and Deep Learning pipeline designed to classify human mental states—specifically Stress, Relaxation, and Attention/Normal—using Electroencephalogram (EEG) signals. 
+
+The core challenge in EEG analysis is that brainwaves are highly complex, non-stationary, and noisy multi-channel time-series signals. The objective of this project is to implement robust signal processing techniques to extract meaningful frequency and time-domain features, and then utilize advanced classification architectures (Deep 1D-CNN and Random Forest) to map those features to distinct cognitive states.
+
+2. The Dataset and Label Engineering
+The system utilizes the DEAP (Database for Emotion Analysis using Physiological Signals) dataset. DEAP provides 32-channel EEG recordings of subjects watching emotion-eliciting videos. 
+- Original Labels: The dataset scores emotions continuously on a 2D plane of "Valence" (positivity/negativity) and "Arousal" (calmness/excitation).
+- Label Mapping: We engineer discrete labels by thresholding these continuous scales:
+  - Stress (Class 0): Low Valence (<5) + High Arousal (>5).
+  - Relaxation (Class 1): High Valence (>=5) + Low Arousal (<=5).
+  - Attention/Normal (Class 2): All moderate or intermediate states.
+
+3. Signal Processing & Windowing Pipeline
+Raw EEG cannot be fed directly into a classifier efficiently. We apply a rigorous digital signal processing (DSP) pipeline.
+- Sliding Window Architecture: Brain states are dynamic. We segment the continuous EEG trials into 4-second windows with a 50% overlap. This captures the temporal evolution of the brain state while vastly increasing the number of training samples.
+- Broadband Filtering: Before windowing, the entire signal passes through a 5th-order Butterworth Bandpass filter (4.0 Hz to 45.0 Hz). This removes low-frequency artifacts (like baseline wander, eye blinks, or sweat) and high-frequency noise (like 50/60Hz AC line noise and muscle movements).
+
+4. Advanced Feature Extraction
+We decompose the filtered EEG signal into standard neurological frequency bands:
+- Theta (4-8 Hz): Associated with drowsiness or deep meditation.
+- Alpha (8-13 Hz): Associated with relaxed wakefulness.
+- Beta (13-30 Hz): Associated with active concentration, focus, or anxiety.
+- Gamma (30-45 Hz): Associated with high-level cognitive processing.
+
+We extract two distinct feature sets for our two different models:
+
+A. Frequency-Domain Features (Used for the Deep 1D-CNN)
+This pipeline utilizes the Fast Fourier Transform (FFT). The FFT is a mathematical algorithm that translates the EEG signal from the time domain (amplitude over time) to the frequency domain (amplitude of constituent frequencies).
+- Power Spectral Density (PSD): We use Welch's Method to calculate PSD. Instead of running one massive FFT which can have high variance and noise, Welch's method splits the window into overlapping segments, applies a windowing function, computes the periodogram (via FFT) for each segment, and averages them. This provides a highly stable measure of how signal power (energy) is distributed across the Theta, Alpha, Beta, and Gamma bands.
+- Differential Entropy (DE): DE measures the complexity or randomness of a continuous random variable. For EEG, DE has been proven to be highly discriminative for emotions. Assuming the band-passed signal follows a Gaussian distribution, DE is mathematically approximated using the logarithm of the variance (which we estimate using the PSD band power).
+- Total features per window: 32 channels × 4 bands × 2 metrics (PSD & DE) = 256 features.
+
+B. Time-Domain Statistical Features (Used for Random Forest)
+The EEG signal is specifically bandpass-filtered for each frequency band, and traditional statistical moments are extracted:
+- Mean (Average amplitude).
+- Standard Deviation (Signal spread or variance).
+- Peak-to-Peak Amplitude (Maximum - Minimum).
+- Total features per window: 32 channels × 4 bands × 3 metrics = 384 features.
+
+5. Data Normalization
+Because EEG amplitude varies wildly between different individuals due to skull thickness and physiological baseline differences, we apply Subject-Wise Normalization. We use a `StandardScaler` independently on each subject's extracted features to enforce a mean of 0 and a standard deviation of 1. This ensures the models learn generalized brainwave patterns rather than memorizing individual subjects' baseline amplitudes.
+
+6. Model Architectures & How the ML Works
+The project trains two separate models to map the extracted feature vectors to the 3 target classes.
+
+A. Deep 1D-Convolutional Neural Network (1D-CNN) with Residual Blocks
+Unlike standard 2D-CNNs used for images, a 1D-CNN slides its filters across a single spatial dimension, making it ideal for sequences or flattened feature vectors.
+- Input reshaping: The 1D feature array is reshaped to `(Batch, 1, Features)`.
+- Initial Convolution: A layer with a kernel size of 7 and stride of 2 extracts low-level patterns, followed by Batch Normalization (to stabilize internal covariate shift) and Max Pooling (to downsample and retain the most prominent features).
+- Residual Blocks (ResNet Architecture): The network contains 4 stacked Residual Blocks, increasing in channel depth (64 -> 128 -> 256 -> 512). In deep networks, gradients can shrink to zero ("vanishing gradients"). Residual blocks solve this by adding a "shortcut" or "skip connection" that adds the original input of the block directly to the output. This allows information and gradients to flow unimpeded.
+- Adaptive Average Pooling: A Global Average Pooling layer mathematically averages each of the 512 feature maps down to a single value. This makes the architecture invariant to the exact number of input features.
+- Dense Classifier: Fully connected linear layers with Dropout (randomly disabling 50% of neurons to prevent overfitting) output the final 3 logits.
+
+B. Random Forest Classifier
+An ensemble learning method that constructs 100 uncorrelated Decision Trees during training. Each tree looks at a random subset of the statistical features and a random sample of the training data (Bagging). To make a prediction, all trees vote, and the majority class wins. It handles high-dimensional, non-linear data efficiently without the need for GPU acceleration.
+
+7. Training Dynamics & Optimization Setup
+- Stratified Split: The dataset is split 80% Train, 20% Test, ensuring the class distribution is identical in both sets.
+- Handling Severe Class Imbalance: Because "Attention/Normal" naturally occurs more often than pure "Stress", the dataset is imbalanced. We use Scikit-Learn's `compute_class_weight` to calculate inverse-frequency weights. 
+- Loss Function: For the CNN, we use `CrossEntropyLoss` and inject the calculated class weights. This heavily penalizes the model for misclassifying minority classes (like Stress). The Random Forest achieves the same via the `class_weight='balanced'` parameter.
+- Optimizer (CNN): The Adam Optimizer is used with a learning rate of 0.001 and Weight Decay (L2 Regularization) to penalize excessively large neural weights.
+- Learning Rate Scheduler: A `ReduceLROnPlateau` scheduler dynamically halves the learning rate if the validation loss stops improving for 5 epochs, allowing the model to settle into the local minimum smoothly.
+- Early Stopping: Training automatically halts if validation loss fails to improve for 15 consecutive epochs. This strictly prevents the CNN from memorizing the training data (overfitting).
+
+8. Interactive Deployment (Streamlit App)
+The system is deployed as an interactive Web Application using Streamlit. 
+- Data Handling: It uses `@st.cache_data` and `@st.cache_resource` to load the pre-computed test feature vectors and the massive trained model weights (`.pth` or `.joblib`) strictly into memory once.
+- Real-time Inference: A user can select a Subject and Trial. The app fetches the feature vector, passes it through a forward-pass of the PyTorch CNN (or the `.predict()` method of the Random Forest), applies a Softmax function to convert raw neural network logits into human-readable percentage probabilities, and visually renders the prediction confidence via interactive charts.
